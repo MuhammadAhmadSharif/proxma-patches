@@ -159,7 +159,10 @@ public final class ClaimJobService extends JobService {
 
         String status = streak + "|" + quiz;
         boolean allLatched = streak.startsWith("latched") && quiz.startsWith("latched");
-        if (!allLatched && !status.equals(prefs.getString(KEY_LAST_STATUS, null))) {
+        // Guest mode / logged out: nothing to claim, so don't post a useless "no-account" status.
+        boolean noAccount = streak.startsWith("no-account") || streak.equals("no msisdn")
+            || streak.equals(StreakClaim.NOT_LOGGED_IN);
+        if (!allLatched && !noAccount && !status.equals(prefs.getString(KEY_LAST_STATUS, null))) {
             WorkerNotify.notifyStatus(context, streak, quiz, next);
             prefs.edit().putString(KEY_LAST_STATUS, status).apply();
         }

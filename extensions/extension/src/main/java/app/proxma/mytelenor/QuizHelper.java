@@ -1,411 +1,312 @@
 package app.proxma.mytelenor;
 
 import android.app.Activity;
-import android.app.Application;
 import android.content.Context;
-import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.widget.Toast;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 
 /**
- * Intercepts Answer & Win quiz question requests in My Telenor.
- * Appends a checkmark (" ✓") to the choice text for all choices where isCorrect == true,
- * so the correct answers are clearly displayed in the UI when playing manually.
+ * Answer key for Answer & Win / Test Your Skills, logged-in or guest.
+ *
+ * <p>Called from the app's own quiz Gson models (see ShowQuizAnswersPatch): the response data class
+ * ({@link #onQuestions}), each question ({@link #onQuestion}) and each choice ({@link #onChoice}). The
+ * choice objects carry {@code isCorrect}; this class appends a tick to the text of the correct ones and
+ * posts a notification listing every correct answer. Only fields are read here (never getters), so the
+ * hooked getters cannot recurse.
  */
 public final class QuizHelper {
 
     private static final String TAG = "PROXMA_MT";
-    private static final Set<Integer> sHookedClients = new HashSet<>();
-    private static volatile boolean sInstalled = false;
+    private static final String MARK = "  \u2713";
+    private static final long SESSION_MS = 2 * 60 * 60 * 1000L;
+
+    /** JSON keys that hold the visible text of a choice, most likely first. */
+    private static final String[] TEXT_KEYS = {
+        "choice", "choiceText", "choice_text", "text", "answer", "answerText", "option", "optionText",
+        "title", "name", "choiceName", "label", "value", "description",
+    };
+    private static final String[] CORRECT_KEYS = {"isCorrect", "is_correct", "correct", "isRight", "isAnswer"};
+
+    private static final Object NONE = new Object();
+    private static final Map<Class<?>, Object> sCorrectField = new HashMap<>();
+    private static final Map<Class<?>, Object> sTextField = new HashMap<>();
+
+    private static final LinkedHashSet<String> sAnswers = new LinkedHashSet<>();
+    private static long sSessionStart = 0L;
+    private static String sLastNotified = "";
+    private static volatile Context sContext;
+    private static volatile boolean sStarted = false;
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final Runnable FLUSH = QuizHelper::flush;
 
     private QuizHelper() {}
 
-    public static synchronized void install(Context context) {
-        if (context == null) return;
-        Context appCtx = context.getApplicationContext();
+    // ---------------------------------------------------------------------------------------------
+    // Entry points (injected by the patch)
+    // ---------------------------------------------------------------------------------------------
 
-        tryHookAllClients(appCtx);
-
-        if (!sInstalled && appCtx instanceof Application) {
-            sInstalled = true;
-            ((Application) appCtx).registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
-                @Override
-                public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
-                    tryHookAllClients(activity.getApplicationContext());
-                }
-
-                @Override
-                public void onActivityStarted(Activity activity) {}
-
-                @Override
-                public void onActivityResumed(Activity activity) {
-                    tryHookAllClients(activity.getApplicationContext());
-                }
-
-                @Override
-                public void onActivityPaused(Activity activity) {}
-
-                @Override
-                public void onActivityStopped(Activity activity) {}
-
-                @Override
-                public void onActivitySaveInstanceState(Activity activity, Bundle outState) {}
-
-                @Override
-                public void onActivityDestroyed(Activity activity) {}
-            });
-            Log.i(TAG, "QUIZ_HELPER lifecycle callbacks registered");
-        }
-    }
-
-    private static void tryHookAllClients(Context context) {
-        // 1. Hook OkHttpClient on Retrofit API proxy
+    public static void onAppStart(final Activity activity) {
         try {
-            Object api = AppSession.api();
-            if (api != null) {
-                attachToRetrofit(context, api);
-            }
-        } catch (Throwable t) {
-            Log.i(TAG, "QUIZ_HOOK_API_WAIT " + t.getClass().getSimpleName());
-        }
-
-        // 2. Scan DaggerApplication singleton fields for OkHttpClient
-        try {
-            Class<?> appClass = Class.forName("com.telenor.pakistan.mytelenor.BaseApp.DaggerApplication");
-            Object appInstance = appClass.getMethod("d").invoke(null);
-            if (appInstance != null) {
-                scanAndAttach(context, appInstance);
-            }
-        } catch (Throwable t) {
-            Log.i(TAG, "QUIZ_HOOK_APP_WAIT " + t.getClass().getSimpleName());
-        }
-    }
-
-    private static void attachToRetrofit(Context context, Object api) {
-        try {
-            InvocationHandler ih = Proxy.getInvocationHandler(api);
-            for (Field f : ih.getClass().getDeclaredFields()) {
-                f.setAccessible(true);
-                Object val = f.get(ih);
-                if (val != null && val.getClass().getName().contains("Retrofit")) {
-                    for (Field rf : val.getClass().getDeclaredFields()) {
-                        rf.setAccessible(true);
-                        Object callFactory = rf.get(val);
-                        if (callFactory != null && callFactory.getClass().getName().contains("OkHttpClient")) {
-                            injectInterceptor(context, callFactory);
-                        }
+            if (activity == null) return;
+            sContext = activity.getApplicationContext();
+            if (sStarted) return;
+            sStarted = true;
+            Log.i(TAG, "QUIZ_HELPER active");
+            MAIN.postDelayed(() -> {
+                try {
+                    Toast.makeText(sContext, "Proxma: quiz answers helper active", Toast.LENGTH_SHORT).show();
+                    if (Build.VERSION.SDK_INT >= 33
+                        && activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS") != 0
+                        && !activity.isFinishing()) {
+                        activity.requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 0x5051);
                     }
+                } catch (Throwable t) {
+                    Log.w(TAG, "QUIZ_HELPER start ui " + t);
                 }
-            }
+            }, 2500L);
         } catch (Throwable t) {
-            Log.i(TAG, "QUIZ_RETROFIT_ERR " + t);
+            Log.w(TAG, "QUIZ_HELPER onAppStart " + t);
         }
     }
 
-    private static void scanAndAttach(Context context, Object target) {
-        if (target == null) return;
+    /** The response data object (holds the question list). Replaces the current answer set. */
+    public static void onQuestions(Object data) {
         try {
-            for (Field f : target.getClass().getDeclaredFields()) {
-                f.setAccessible(true);
-                Object obj = f.get(target);
-                if (obj != null && obj.getClass().getName().contains("OkHttpClient")) {
-                    injectInterceptor(context, obj);
-                }
+            if (data == null) return;
+            List<String> answers = new ArrayList<>();
+            for (Object question : collectionElements(data)) {
+                String a = processQuestion(question);
+                if (a != null) answers.add(a);
             }
-        } catch (Throwable ignored) {}
-    }
-
-    @SuppressWarnings("unchecked")
-    private static synchronized void injectInterceptor(Context context, Object okHttpClient) {
-        if (okHttpClient == null) return;
-        int id = System.identityHashCode(okHttpClient);
-        if (sHookedClients.contains(id)) return;
-
-        try {
-            Field interceptorsField = null;
-            for (Field f : okHttpClient.getClass().getDeclaredFields()) {
-                if ("interceptors".equals(f.getName()) || 
-                    (List.class.isAssignableFrom(f.getType()) && !f.getName().equals("networkInterceptors"))) {
-                    interceptorsField = f;
-                    break;
-                }
+            if (answers.isEmpty()) return;
+            synchronized (sAnswers) {
+                sAnswers.clear();
+                sAnswers.addAll(answers);
+                sSessionStart = System.currentTimeMillis();
             }
-            if (interceptorsField == null) {
-                interceptorsField = okHttpClient.getClass().getDeclaredField("interceptors");
-            }
-            interceptorsField.setAccessible(true);
-            Object listObj = interceptorsField.get(okHttpClient);
-
-            if (listObj instanceof List) {
-                List targetList = (List) listObj;
-                // UnmodifiableList backing list extraction
-                if (listObj.getClass().getName().contains("Unmodifiable")) {
-                    for (Field uf : listObj.getClass().getDeclaredFields()) {
-                        if (Collection.class.isAssignableFrom(uf.getType()) || List.class.isAssignableFrom(uf.getType())) {
-                            uf.setAccessible(true);
-                            Object inner = uf.get(listObj);
-                            if (inner instanceof List) {
-                                targetList = (List) inner;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                Object interceptor = createInterceptor(context);
-                if (interceptor != null) {
-                    targetList.add(0, interceptor);
-                    sHookedClients.add(id);
-                    Log.i(TAG, "QUIZ_INTERCEPTOR_INJECTED client=" + id);
-                }
-            }
+            scheduleFlush(0L);
         } catch (Throwable t) {
-            Log.w(TAG, "QUIZ_INJECT_ERR " + t);
+            Log.w(TAG, "QUIZ_HELPER onQuestions " + t);
         }
     }
 
-    private static Object createInterceptor(final Context context) {
+    /** A single question object (holds its choice list). */
+    public static void onQuestion(Object question) {
         try {
-            Class<?> interceptorClass = Class.forName("okhttp3.Interceptor");
-            return Proxy.newProxyInstance(
-                interceptorClass.getClassLoader(),
-                new Class<?>[]{interceptorClass},
-                new InvocationHandler() {
-                    @Override
-                    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-                        if ("intercept".equals(method.getName()) && args != null && args.length == 1) {
-                            return handleIntercept(context, args[0]);
-                        }
-                        if ("equals".equals(method.getName())) {
-                            return proxy == (args != null && args.length > 0 ? args[0] : null);
-                        }
-                        if ("hashCode".equals(method.getName())) {
-                            return System.identityHashCode(proxy);
-                        }
-                        if ("toString".equals(method.getName())) {
-                            return "ProxmaQuizInterceptor";
-                        }
-                        return method.invoke(this, args);
-                    }
-                }
-            );
+            String a = processQuestion(question);
+            if (a != null && addAnswer(a)) scheduleFlush(600L);
         } catch (Throwable t) {
-            Log.w(TAG, "CREATE_INTERCEPTOR_ERR " + t);
-            return null;
+            Log.w(TAG, "QUIZ_HELPER onQuestion " + t);
         }
     }
 
-    private static Object handleIntercept(Context context, Object chain) throws Throwable {
-        Object request = chain.getClass().getMethod("request").invoke(chain);
-        Object httpUrl = request.getClass().getMethod("url").invoke(request);
-        String url = httpUrl != null ? httpUrl.toString() : "";
-
-        Method proceedMethod = null;
-        for (Method m : chain.getClass().getMethods()) {
-            if ("proceed".equals(m.getName()) && m.getParameterTypes().length == 1) {
-                proceedMethod = m;
-                break;
-            }
+    /** A single choice object, read by the screen when it renders the option. */
+    public static void onChoice(Object choice) {
+        try {
+            String a = processChoice(choice);
+            if (a != null && addAnswer(a)) scheduleFlush(600L);
+        } catch (Throwable t) {
+            Log.w(TAG, "QUIZ_HELPER onChoice " + t);
         }
-        if (proceedMethod == null) {
-            throw new IllegalStateException("Chain.proceed not found");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Model walking
+    // ---------------------------------------------------------------------------------------------
+
+    /** Marks the correct choice(s) of a question; returns the (first) correct answer text. */
+    private static String processQuestion(Object question) throws IllegalAccessException {
+        if (question == null) return null;
+        String found = null;
+        for (Object element : collectionElements(question)) {
+            if (element == null || correctField(element.getClass()) == null) continue;
+            String a = processChoice(element);
+            if (a != null && found == null) found = a;
         }
+        return found;
+    }
 
-        Object response = proceedMethod.invoke(chain, request);
+    /** If this choice is the correct one, adds the tick to its text and returns the clean text. */
+    private static String processChoice(Object choice) throws IllegalAccessException {
+        if (choice == null) return null;
+        Field correct = correctField(choice.getClass());
+        if (correct == null || !truthy(correct.get(choice))) return null;
+        Field textField = textField(choice);
+        if (textField == null) return null;
+        String text = (String) textField.get(choice);
+        if (text == null || text.trim().isEmpty()) return null;
+        String clean = text.endsWith(MARK) ? text.substring(0, text.length() - MARK.length()) : text;
+        if (!text.endsWith(MARK)) textField.set(choice, text + MARK);
+        return clean.trim();
+    }
 
-        // Check for quiz trivia questions endpoint (logged-in, guest, daily, or test-your-skills)
-        String lowerUrl = url.toLowerCase();
-        if (lowerUrl.contains("qplayandwin") || lowerUrl.contains("playandwin") ||
-            lowerUrl.contains("trivia") || lowerUrl.contains("questions")) {
+    /** Elements of every Collection field declared on the object's class hierarchy. */
+    private static List<Object> collectionElements(Object owner) {
+        List<Object> out = new ArrayList<>();
+        for (Field f : allFields(owner.getClass())) {
+            if (!Collection.class.isAssignableFrom(f.getType())) continue;
             try {
-                Object body = response.getClass().getMethod("body").invoke(response);
-                if (body != null) {
-                    String rawJson = (String) body.getClass().getMethod("string").invoke(body);
-                    List<String> answers = extractAnswersList(rawJson);
-                    if (answers != null && !answers.isEmpty()) {
-                        WorkerNotify.notifyQuizAnswers(context, answers);
-                        showAnswerToast(context, answers);
-                    }
-                    String modifiedJson = modifyQuizJson(rawJson);
-                    if (modifiedJson != null) {
-                        Object mediaType = body.getClass().getMethod("contentType").invoke(body);
-                        Object newBody = createResponseBody(body.getClass(), mediaType, modifiedJson);
-                        if (newBody != null) {
-                            Object newBuilder = response.getClass().getMethod("newBuilder").invoke(response);
-                            newBuilder.getClass().getMethod("body", body.getClass()).invoke(newBuilder, newBody);
-                            response = newBuilder.getClass().getMethod("build").invoke(newBuilder);
-
-                            Log.i(TAG, "QUIZ_INTERCEPT_SUCCESS: answer key marked with ✓");
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                Log.w(TAG, "QUIZ_INTERCEPT_BODY_ERR " + t);
-            }
+                Object value = f.get(owner);
+                if (value instanceof Collection) out.addAll((Collection<?>) value);
+            } catch (Throwable ignored) {}
         }
-
-        return response;
+        return out;
     }
 
-    private static Object createResponseBody(Class<?> responseBodyClass, Object mediaType, String content) {
-        try {
-            for (Method m : responseBodyClass.getMethods()) {
-                if (Modifier.isStatic(m.getModifiers()) && "create".equals(m.getName())) {
-                    Class<?>[] params = m.getParameterTypes();
-                    if (params.length == 2) {
-                        if (params[0].isAssignableFrom(mediaType != null ? mediaType.getClass() : Object.class) &&
-                            params[1] == String.class) {
-                            return m.invoke(null, mediaType, content);
-                        }
-                    }
+    private static Field correctField(Class<?> cls) {
+        synchronized (sCorrectField) {
+            Object cached = sCorrectField.get(cls);
+            if (cached != null) return cached == NONE ? null : (Field) cached;
+            Field result = null;
+            for (Field f : allFields(cls)) {
+                String key = jsonKey(f);
+                for (String k : CORRECT_KEYS) {
+                    if (k.equalsIgnoreCase(key) || k.equalsIgnoreCase(f.getName())) { result = f; break; }
                 }
+                if (result != null) break;
             }
+            sCorrectField.put(cls, result == null ? NONE : result);
+            return result;
+        }
+    }
 
-            // OkHttp 4 Companion fallback: ResponseBody.Companion.create(content, mediaType)
-            Class<?> compClass = Class.forName("okhttp3.ResponseBody$Companion");
-            Field compField = responseBodyClass.getField("Companion");
-            Object comp = compField.get(null);
-            for (Method m : compClass.getMethods()) {
-                if ("create".equals(m.getName()) && m.getParameterTypes().length == 2) {
-                    Class<?>[] params = m.getParameterTypes();
-                    if (params[0] == String.class) {
-                        return m.invoke(comp, content, mediaType);
-                    }
-                }
+    private static Field textField(Object choice) {
+        Class<?> cls = choice.getClass();
+        synchronized (sTextField) {
+            Object cached = sTextField.get(cls);
+            if (cached != null) return cached == NONE ? null : (Field) cached;
+        }
+        List<Field> strings = new ArrayList<>();
+        for (Field f : allFields(cls)) if (f.getType() == String.class) strings.add(f);
+
+        Field result = null;
+        for (String k : TEXT_KEYS) {
+            for (Field f : strings) {
+                if (k.equalsIgnoreCase(jsonKey(f)) || k.equalsIgnoreCase(f.getName())) { result = f; break; }
             }
-        } catch (Throwable t) {
-            Log.w(TAG, "CREATE_RESPONSE_BODY_ERR " + t);
+            if (result != null) break;
+        }
+        if (result != null) {
+            synchronized (sTextField) { sTextField.put(cls, result); }
+            return result;
+        }
+        // Fallback (not cached, value dependent): the first String that looks like visible text.
+        for (Field f : strings) {
+            String key = jsonKey(f).toLowerCase();
+            if (key.contains("id") || key.contains("url") || key.contains("image") || key.contains("img")
+                || key.contains("icon") || key.contains("color") || key.contains("type")) continue;
+            try {
+                String v = (String) f.get(choice);
+                if (v == null || v.trim().isEmpty() || v.startsWith("http") || v.matches("\\d+")) continue;
+                return f;
+            } catch (Throwable ignored) {}
         }
         return null;
     }
 
-    private static JSONArray findQuestionsArray(JSONObject root) {
-        if (root == null) return null;
-        if (root.has("data")) {
-            Object d = root.opt("data");
-            if (d instanceof JSONObject) {
-                JSONObject dataObj = (JSONObject) d;
-                JSONArray arr = dataObj.optJSONArray("triviaQuestions");
-                if (arr == null) arr = dataObj.optJSONArray("questions");
-                if (arr == null) arr = dataObj.optJSONArray("dailyQuestions");
-                if (arr != null) return arr;
-            } else if (d instanceof JSONArray) {
-                return (JSONArray) d;
+    private static List<Field> allFields(Class<?> cls) {
+        List<Field> out = new ArrayList<>();
+        for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+            String n = c.getName();
+            if (n.startsWith("java.") || n.startsWith("android.") || n.startsWith("kotlin.")) break;
+            for (Field f : c.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers())) continue;
+                try { f.setAccessible(true); } catch (Throwable ignored) { continue; }
+                out.add(f);
             }
         }
-        JSONArray arr = root.optJSONArray("triviaQuestions");
-        if (arr == null) arr = root.optJSONArray("questions");
-        return arr;
+        return out;
     }
 
-    private static String modifyQuizJson(String rawJson) {
+    /** The JSON key Gson uses for this field (@SerializedName value, else the field name). */
+    private static String jsonKey(Field f) {
         try {
-            JSONObject root = new JSONObject(rawJson);
-            JSONArray questions = findQuestionsArray(root);
-            if (questions == null || questions.length() == 0) return null;
-
-            boolean modified = false;
-            for (int i = 0; i < questions.length(); i++) {
-                JSONObject q = questions.optJSONObject(i);
-                if (q == null) continue;
-                JSONArray choices = q.optJSONArray("choices");
-                if (choices == null) choices = q.optJSONArray("options");
-                if (choices == null) continue;
-                for (int j = 0; j < choices.length(); j++) {
-                    JSONObject c = choices.optJSONObject(j);
-                    if (c == null) continue;
-                    boolean isCorrect = c.optBoolean("isCorrect", false)
-                        || c.optInt("isCorrect", 0) == 1
-                        || "true".equalsIgnoreCase(c.optString("isCorrect", ""));
-                    if (isCorrect) {
-                        String field = c.has("choice") ? "choice" : (c.has("option") ? "option" : "text");
-                        String text = c.optString(field, "");
-                        if (!text.endsWith("✓") && !text.endsWith("✅")) {
-                            c.put(field, text + "  ✓");
-                            modified = true;
-                        }
-                    }
+            for (Annotation a : f.getDeclaredAnnotations()) {
+                if (a.annotationType().getName().endsWith("SerializedName")) {
+                    Method value = a.annotationType().getMethod("value");
+                    Object v = value.invoke(a);
+                    if (v instanceof String && !((String) v).isEmpty()) return (String) v;
                 }
             }
-            return modified ? root.toString() : null;
-        } catch (Throwable t) {
-            Log.w(TAG, "MODIFY_QUIZ_JSON_ERR " + t);
-            return null;
+        } catch (Throwable ignored) {}
+        return f.getName();
+    }
+
+    private static boolean truthy(Object v) {
+        if (v instanceof Boolean) return (Boolean) v;
+        if (v instanceof Number) return ((Number) v).intValue() == 1;
+        if (v instanceof String) return "true".equalsIgnoreCase((String) v) || "1".equals(v);
+        return false;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Output
+    // ---------------------------------------------------------------------------------------------
+
+    private static boolean addAnswer(String answer) {
+        synchronized (sAnswers) {
+            long now = System.currentTimeMillis();
+            if (now - sSessionStart > SESSION_MS) {
+                sAnswers.clear();
+                sSessionStart = now;
+            }
+            return sAnswers.add(answer);
         }
     }
 
-    public static List<String> extractAnswersList(String rawJson) {
+    private static void scheduleFlush(long delayMs) {
+        MAIN.removeCallbacks(FLUSH);
+        MAIN.postDelayed(FLUSH, delayMs);
+    }
+
+    private static void flush() {
         try {
-            JSONObject root = new JSONObject(rawJson);
-            JSONArray questions = findQuestionsArray(root);
-            if (questions == null || questions.length() == 0) return null;
+            List<String> answers;
+            synchronized (sAnswers) { answers = new ArrayList<>(sAnswers); }
+            if (answers.isEmpty()) return;
+            String joined = android.text.TextUtils.join("\n", answers);
+            if (joined.equals(sLastNotified)) return;
+            sLastNotified = joined;
 
-            List<String> list = new java.util.ArrayList<>();
-            for (int i = 0; i < questions.length(); i++) {
-                JSONObject q = questions.optJSONObject(i);
-                if (q == null) continue;
-                JSONArray choices = q.optJSONArray("choices");
-                if (choices == null) choices = q.optJSONArray("options");
-                if (choices == null) continue;
-                String correctChoice = null;
-                for (int j = 0; j < choices.length(); j++) {
-                    JSONObject c = choices.optJSONObject(j);
-                    if (c == null) continue;
-                    boolean isCorrect = c.optBoolean("isCorrect", false)
-                        || c.optInt("isCorrect", 0) == 1
-                        || "true".equalsIgnoreCase(c.optString("isCorrect", ""));
-                    if (isCorrect) {
-                        correctChoice = c.optString("choice", c.optString("option", c.optString("text", "")));
-                        break;
-                    }
-                }
-                if (correctChoice != null && !correctChoice.isEmpty()) {
-                    list.add(correctChoice);
-                }
+            Context ctx = context();
+            if (ctx == null) {
+                Log.w(TAG, "QUIZ_HELPER no context for notification");
+                return;
             }
-            return list;
+            WorkerNotify.notifyQuizAnswers(ctx, answers);
+
+            StringBuilder sb = new StringBuilder("Answers: ");
+            for (int i = 0; i < answers.size(); i++) {
+                if (i > 0) sb.append(" | ");
+                sb.append(i + 1).append(". ").append(answers.get(i));
+            }
+            Toast.makeText(ctx, sb.toString(), Toast.LENGTH_LONG).show();
+            Log.i(TAG, "QUIZ_HELPER answers=" + answers.size());
         } catch (Throwable t) {
-            Log.w(TAG, "EXTRACT_ANSWERS_ERR " + t);
-            return null;
+            Log.w(TAG, "QUIZ_HELPER flush " + t);
         }
     }
 
-    private static void showAnswerToast(final Context context, final List<String> answers) {
-        if (context == null) return;
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    String msg;
-                    if (answers != null && !answers.isEmpty()) {
-                        StringBuilder sb = new StringBuilder("Answer Key:\n");
-                        for (int i = 0; i < answers.size(); i++) {
-                            if (i > 0) sb.append("\n");
-                            sb.append(i + 1).append(". ").append(answers.get(i));
-                        }
-                        msg = sb.toString();
-                    } else {
-                        msg = "Answer & Win: Correct options marked with ✓";
-                    }
-                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show();
-                } catch (Throwable ignored) {}
-            }
-        });
+    private static Context context() {
+        if (sContext != null) return sContext;
+        try {
+            Object app = Class.forName("android.app.ActivityThread").getMethod("currentApplication").invoke(null);
+            if (app instanceof Context) sContext = ((Context) app).getApplicationContext();
+        } catch (Throwable ignored) {}
+        return sContext;
     }
 }
-

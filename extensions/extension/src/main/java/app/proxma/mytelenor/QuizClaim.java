@@ -71,7 +71,7 @@ public final class QuizClaim {
             String url = questionsUrl(msisdn);
             StreakClaim.HttpResult r = get(context, "quiz-questions-preview", url, msisdn);
             if (StreakClaim.succeeded(r)) {
-                java.util.List<String> answers = QuizHelper.extractAnswersList(r.body);
+                java.util.List<String> answers = answerTexts(r.body);
                 if (answers != null && !answers.isEmpty()) {
                     WorkerNotify.notifyQuizAnswers(context, answers);
                     Log.i(TAG, "QUIZ_BG_NOTIFY " + answers.size());
@@ -80,6 +80,31 @@ public final class QuizClaim {
         } catch (Throwable t) {
             Log.i(TAG, "QUIZ_BG_NOTIFY_ERR " + t.getClass().getSimpleName());
         }
+    }
+
+    /** Visible text of the correct choice of every question in a questions response. */
+    private static java.util.List<String> answerTexts(String body) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        try {
+            JSONObject data = new JSONObject(body).optJSONObject("data");
+            JSONArray questions = data != null ? data.optJSONArray("triviaQuestions") : null;
+            if (questions == null) return out;
+            String[] keys = {"choice", "choiceText", "text", "answer", "option", "title", "name"};
+            for (int i = 0; i < questions.length(); i++) {
+                JSONArray choices = questions.getJSONObject(i).optJSONArray("choices");
+                if (choices == null) continue;
+                for (int j = 0; j < choices.length(); j++) {
+                    JSONObject c = choices.getJSONObject(j);
+                    if (!c.optBoolean("isCorrect", false)) continue;
+                    for (String k : keys) {
+                        String v = c.optString(k, "");
+                        if (!v.isEmpty()) { out.add(v); break; }
+                    }
+                    break;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return out;
     }
 
     private static boolean quizInner(Context context) throws Exception {

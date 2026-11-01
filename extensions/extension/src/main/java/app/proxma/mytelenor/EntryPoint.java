@@ -18,7 +18,6 @@ public final class EntryPoint {
             if (activity == null) return;
             Log.i(TAG, "ENTRY_POINT onActivityCreate");
             Context context = activity.getApplicationContext();
-            QuizHelper.install(context);
             if (!sScheduled) {
                 sScheduled = true;
                 ClaimJobService.schedule(context);
