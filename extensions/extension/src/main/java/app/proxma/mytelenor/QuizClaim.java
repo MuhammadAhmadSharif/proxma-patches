@@ -40,12 +40,13 @@ public final class QuizClaim {
 
     /** Returns false when the run should be retried later. */
     /** Marking the quiz uses up the day, so this is the switch to turn auto-play off if it breaks. */
-    static final boolean ENABLED = true;
+    static final boolean ENABLED = false;
 
     public static boolean tryClaimQuiz(Context context) {
         sResult = "n/a";
         if (!ENABLED) {
-            sResult = "latched (auto-play off, play in app)";
+            tryFetchAndNotifyAnswers(context);
+            sResult = "answers notified (play in app)";
             return true;
         }
         try {
@@ -58,6 +59,26 @@ public final class QuizClaim {
             Log.i(TAG, "QUIZ_ERR " + t);
             sResult = "error: " + t.getMessage();
             return false;
+        }
+    }
+
+    private static void tryFetchAndNotifyAnswers(Context context) {
+        try {
+            String msisdn = StreakClaim.resolveMsisdn(context);
+            if (msisdn == null || msisdn.isEmpty() || !StreakClaim.loggedIn(context) || !AppSession.headersReady()) {
+                return;
+            }
+            String url = questionsUrl(msisdn);
+            StreakClaim.HttpResult r = get(context, "quiz-questions-preview", url, msisdn);
+            if (StreakClaim.succeeded(r)) {
+                java.util.List<String> answers = QuizHelper.extractAnswersList(r.body);
+                if (answers != null && !answers.isEmpty()) {
+                    WorkerNotify.notifyQuizAnswers(context, answers);
+                    Log.i(TAG, "QUIZ_BG_NOTIFY " + answers.size());
+                }
+            }
+        } catch (Throwable t) {
+            Log.i(TAG, "QUIZ_BG_NOTIFY_ERR " + t.getClass().getSimpleName());
         }
     }
 

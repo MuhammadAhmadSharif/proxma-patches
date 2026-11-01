@@ -13,6 +13,7 @@ public final class WorkerNotify {
     private static final String CHANNEL_ID = "proxma_mt_auto";
     private static final String CHANNEL_NAME = "My Telenor Auto";
     private static final int NOTIF_ID = 1004;
+    private static final int NOTIF_QUIZ_ID = 1006;
 
     private WorkerNotify() {}
 
@@ -62,6 +63,62 @@ public final class WorkerNotify {
             nm.notify(NOTIF_ID, builder.build());
         } catch (Throwable t) {
             Log.w(TAG, "notifyStatus failed: " + t);
+        }
+    }
+
+    public static void notifyQuizAnswers(Context context, java.util.List<String> answers) {
+        if (context == null || answers == null || answers.isEmpty()) return;
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (context.checkSelfPermission("android.permission.POST_NOTIFICATIONS") != 0) {
+                    return;
+                }
+            }
+
+            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel channel = new NotificationChannel(CHANNEL_ID, CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_HIGH);
+                channel.setDescription("My Telenor auto-claim status and quiz answers");
+                nm.createNotificationChannel(channel);
+            }
+
+            int icon = context.getApplicationInfo().icon;
+            if (icon == 0) return;
+
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < answers.size(); i++) {
+                if (i > 0) sb.append("\n");
+                sb.append(i + 1).append(". ").append(answers.get(i));
+            }
+            String body = sb.toString();
+
+            Notification.Builder builder;
+            if (Build.VERSION.SDK_INT >= 26) {
+                builder = new Notification.Builder(context, CHANNEL_ID);
+            } else {
+                builder = new Notification.Builder(context);
+            }
+
+            builder.setSmallIcon(icon)
+                .setContentTitle("Answer & Win: Quiz Answers")
+                .setContentText(answers.size() + " correct answers ready (pull down to view)")
+                .setStyle(new Notification.BigTextStyle()
+                    .setBigContentTitle("Answer & Win: Quiz Answers")
+                    .bigText(body))
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(false);
+
+            if (Build.VERSION.SDK_INT >= 26) {
+                builder.setTimeoutAfter(24 * 60 * 60 * 1000L);
+            }
+
+            nm.notify(NOTIF_QUIZ_ID, builder.build());
+            Log.i(TAG, "NOTIFY_QUIZ_ANSWERS posted: " + answers.size() + " answers");
+        } catch (Throwable t) {
+            Log.w(TAG, "notifyQuizAnswers failed: " + t);
         }
     }
 }
