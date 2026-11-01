@@ -1,3 +1,9 @@
+## [1.28.0](https://github.com/MuhammadAhmadSharif/proxma-patches/releases/tag/1.28.0) (2026-11-01)
+
+### Features
+
+* **mytelenor:** show quiz answers with tick (✓) and notification in guest and logged-in mode
+
 ## [1.27.5](https://github.com/totsiaw/proxma-patches/compare/1.27.4...1.27.5) (2026-10-31)
 
 ### Bug Fixes

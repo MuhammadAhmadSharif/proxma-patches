@@ -5,7 +5,7 @@ Morphe patch bundle for **My Telenor**, **Investify**, **Simosa** (Jazz), **OLX*
 ## How to use
 
 1. Install [Morphe Manager](https://morphe.software).
-2. Add this source: https://morphe.software/add-source?github=totsiaw/proxma-patches
+2. Add this source: https://morphe.software/add-source?github=MuhammadAhmadSharif/proxma-patches
    (already added? open the source and tap **Update** / pull-to-refresh to get the latest version).
 3. Pick your app, select the patches you want, tap **Patch**, then install the result.
 

@@ -1,6 +1,6 @@
 {
   "NOTE": "Do NOT manually edit this file. This file is automatically updated when semantic release (release.yml) runs. Manually editing this file can break your releases and break third party tools that use this file.",
-  "version": "1.27.5",
+  "version": "1.28.0",
   "patches": [
     {
       "name": "Auto check-in & claim daily reward",
@@ -852,6 +852,34 @@
               "versionCodes": null,
               "isExperimental": false,
               "minSdk": 23,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "options": []
+    },
+    {
+      "name": "Show quiz answers",
+      "description": "Marks the correct option with a tick (✓) in Answer & Win / Test Your Skills and shows all correct answers in a notification as soon as the quiz opens. Works for logged-in users and in guest mode. Nothing is answered or submitted for you.",
+      "default": true,
+      "dependencies": [
+        "ResourcePatch"
+      ],
+      "compatiblePackages": [
+        {
+          "packageName": "com.telenor.pakistan.mytelenor",
+          "name": "My Telenor",
+          "description": null,
+          "apkFileType": "APK_REQUIRED",
+          "appIconColor": "#00A8E0",
+          "signatures": [],
+          "targets": [
+            {
+              "version": "4.2.63",
+              "versionCodes": null,
+              "isExperimental": false,
+              "minSdk": 24,
               "description": null
             }
           ]

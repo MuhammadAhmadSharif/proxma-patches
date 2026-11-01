@@ -4,7 +4,7 @@ patches {
     about {
         name = "Proxma Patches"
         description = "Proxma Patches"
-        source = "https://github.com/totsiaw/proxma-patches"
+        source = "https://github.com/MuhammadAhmadSharif/proxma-patches"
         author = "Proxma"
         contact = ""
         website = ""
