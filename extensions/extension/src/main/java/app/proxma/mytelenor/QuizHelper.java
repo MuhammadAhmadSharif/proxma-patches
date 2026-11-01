@@ -228,8 +228,10 @@ public final class QuizHelper {
 
         Object response = proceedMethod.invoke(chain, request);
 
-        // Check for quiz trivia questions endpoint
-        if (url.contains("qplayandwin") || url.contains("questions/daily") || url.contains("getTrivialQuestion")) {
+        // Check for quiz trivia questions endpoint (logged-in, guest, daily, or test-your-skills)
+        String lowerUrl = url.toLowerCase();
+        if (lowerUrl.contains("qplayandwin") || lowerUrl.contains("playandwin") ||
+            lowerUrl.contains("trivia") || lowerUrl.contains("questions")) {
             try {
                 Object body = response.getClass().getMethod("body").invoke(response);
                 if (body != null) {
@@ -237,6 +239,7 @@ public final class QuizHelper {
                     List<String> answers = extractAnswersList(rawJson);
                     if (answers != null && !answers.isEmpty()) {
                         WorkerNotify.notifyQuizAnswers(context, answers);
+                        showAnswerToast(context, answers);
                     }
                     String modifiedJson = modifyQuizJson(rawJson);
                     if (modifiedJson != null) {
@@ -248,7 +251,6 @@ public final class QuizHelper {
                             response = newBuilder.getClass().getMethod("build").invoke(newBuilder);
 
                             Log.i(TAG, "QUIZ_INTERCEPT_SUCCESS: answer key marked with ✓");
-                            showAnswerToast(context);
                         }
                     }
                 }
@@ -292,12 +294,29 @@ public final class QuizHelper {
         return null;
     }
 
+    private static JSONArray findQuestionsArray(JSONObject root) {
+        if (root == null) return null;
+        if (root.has("data")) {
+            Object d = root.opt("data");
+            if (d instanceof JSONObject) {
+                JSONObject dataObj = (JSONObject) d;
+                JSONArray arr = dataObj.optJSONArray("triviaQuestions");
+                if (arr == null) arr = dataObj.optJSONArray("questions");
+                if (arr == null) arr = dataObj.optJSONArray("dailyQuestions");
+                if (arr != null) return arr;
+            } else if (d instanceof JSONArray) {
+                return (JSONArray) d;
+            }
+        }
+        JSONArray arr = root.optJSONArray("triviaQuestions");
+        if (arr == null) arr = root.optJSONArray("questions");
+        return arr;
+    }
+
     private static String modifyQuizJson(String rawJson) {
         try {
             JSONObject root = new JSONObject(rawJson);
-            JSONObject data = root.optJSONObject("data");
-            if (data == null) return null;
-            JSONArray questions = data.optJSONArray("triviaQuestions");
+            JSONArray questions = findQuestionsArray(root);
             if (questions == null || questions.length() == 0) return null;
 
             boolean modified = false;
@@ -305,14 +324,19 @@ public final class QuizHelper {
                 JSONObject q = questions.optJSONObject(i);
                 if (q == null) continue;
                 JSONArray choices = q.optJSONArray("choices");
+                if (choices == null) choices = q.optJSONArray("options");
                 if (choices == null) continue;
                 for (int j = 0; j < choices.length(); j++) {
                     JSONObject c = choices.optJSONObject(j);
                     if (c == null) continue;
-                    if (c.optBoolean("isCorrect", false)) {
-                        String text = c.optString("choice", "");
+                    boolean isCorrect = c.optBoolean("isCorrect", false)
+                        || c.optInt("isCorrect", 0) == 1
+                        || "true".equalsIgnoreCase(c.optString("isCorrect", ""));
+                    if (isCorrect) {
+                        String field = c.has("choice") ? "choice" : (c.has("option") ? "option" : "text");
+                        String text = c.optString(field, "");
                         if (!text.endsWith("✓") && !text.endsWith("✅")) {
-                            c.put("choice", text + "  ✓");
+                            c.put(field, text + "  ✓");
                             modified = true;
                         }
                     }
@@ -328,9 +352,7 @@ public final class QuizHelper {
     public static List<String> extractAnswersList(String rawJson) {
         try {
             JSONObject root = new JSONObject(rawJson);
-            JSONObject data = root.optJSONObject("data");
-            if (data == null) return null;
-            JSONArray questions = data.optJSONArray("triviaQuestions");
+            JSONArray questions = findQuestionsArray(root);
             if (questions == null || questions.length() == 0) return null;
 
             List<String> list = new java.util.ArrayList<>();
@@ -338,12 +360,17 @@ public final class QuizHelper {
                 JSONObject q = questions.optJSONObject(i);
                 if (q == null) continue;
                 JSONArray choices = q.optJSONArray("choices");
+                if (choices == null) choices = q.optJSONArray("options");
                 if (choices == null) continue;
                 String correctChoice = null;
                 for (int j = 0; j < choices.length(); j++) {
                     JSONObject c = choices.optJSONObject(j);
-                    if (c != null && c.optBoolean("isCorrect", false)) {
-                        correctChoice = c.optString("choice", "");
+                    if (c == null) continue;
+                    boolean isCorrect = c.optBoolean("isCorrect", false)
+                        || c.optInt("isCorrect", 0) == 1
+                        || "true".equalsIgnoreCase(c.optString("isCorrect", ""));
+                    if (isCorrect) {
+                        correctChoice = c.optString("choice", c.optString("option", c.optString("text", "")));
                         break;
                     }
                 }
@@ -358,13 +385,24 @@ public final class QuizHelper {
         }
     }
 
-    private static void showAnswerToast(final Context context) {
+    private static void showAnswerToast(final Context context, final List<String> answers) {
         if (context == null) return;
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
             public void run() {
                 try {
-                    Toast.makeText(context, "Answer & Win: Correct options marked with ✓", Toast.LENGTH_LONG).show();
+                    String msg;
+                    if (answers != null && !answers.isEmpty()) {
+                        StringBuilder sb = new StringBuilder("Answer Key:\n");
+                        for (int i = 0; i < answers.size(); i++) {
+                            if (i > 0) sb.append("\n");
+                            sb.append(i + 1).append(". ").append(answers.get(i));
+                        }
+                        msg = sb.toString();
+                    } else {
+                        msg = "Answer & Win: Correct options marked with ✓";
+                    }
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show();
                 } catch (Throwable ignored) {}
             }
         });
