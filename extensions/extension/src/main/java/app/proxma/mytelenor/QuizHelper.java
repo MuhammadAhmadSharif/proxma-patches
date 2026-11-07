@@ -26,15 +26,14 @@ import java.util.Map;
  *
  * <p>Called from the app's own quiz Gson models (see ShowQuizAnswersPatch): the response data class
  * ({@link #onQuestions}), each question ({@link #onQuestion}) and each choice ({@link #onChoice}). The
- * choice objects carry {@code isCorrect}; this class prefixes the 1-based option number (1..4) and
- * appends a tick to the text of the correct ones, builds the compact numeric answer key (e.g. {@code 21323}),
- * and posts a notification + Toast listing the key and every correct answer. Only fields are read here
- * (never getters), so the hooked getters cannot recurse.
+ * choice objects carry {@code isCorrect}; this class prefixes the 1-based option number (1..4) to the
+ * text of the correct ones, builds the compact numeric answer key (e.g. {@code 21323}), and posts a
+ * notification + Toast listing the key and every correct answer. Only fields are read here (never
+ * getters), so the hooked getters cannot recurse.
  */
 public final class QuizHelper {
 
     private static final String TAG = "PROXMA_MT";
-    private static final String MARK = "  \u2713";
     private static final long SESSION_MS = 2 * 60 * 60 * 1000L;
 
     /** JSON keys that hold the visible text of a choice, most likely first. */
@@ -224,7 +223,7 @@ public final class QuizHelper {
     }
 
     /**
-     * If this choice is the correct one, formats its visible text as {@code "<optNum> - <clean>  ✓"}
+     * If this choice is the correct one, formats its visible text as {@code "<optNum> - <clean>"}
      * and returns the original clean text.
      */
     private static String processChoiceLocked(Object choice, int optNum) throws IllegalAccessException {
@@ -242,7 +241,7 @@ public final class QuizHelper {
             clean = stripDecorations(current);
             sCleanText.put(cId, clean);
         }
-        String formatted = optNum + " - " + clean + MARK;
+        String formatted = optNum + " - " + clean;
         if (!formatted.equals(current)) {
             textField.set(choice, formatted);
         }
@@ -250,12 +249,7 @@ public final class QuizHelper {
     }
 
     private static String stripDecorations(String text) {
-        String s = text;
-        if (s.endsWith(MARK)) {
-            s = s.substring(0, s.length() - MARK.length());
-        }
-        s = s.replaceFirst("^[1-9]\\s*-\\s*", "");
-        return s.trim();
+        return text.replaceFirst("^[1-9]\\s*-\\s*", "").trim();
     }
 
     /** Elements of every Collection field declared on the object's class hierarchy. */
