@@ -1,3 +1,9 @@
+## [1.1.2](https://github.com/MuhammadAhmadSharif/proxma-patches/compare/1.1.1...1.1.2) (2026-11-07)
+
+### Bug Fixes
+
+* **mytelenor:** show answer key only in notification and leave option buttons unmodified ([97a2b99](https://github.com/MuhammadAhmadSharif/proxma-patches/commit/97a2b995e48d7572dd5a383fd79144a7790fc5ed))
+
 ## [1.1.1](https://github.com/MuhammadAhmadSharif/proxma-patches/compare/1.1.0...1.1.1) (2026-11-07)
 
 ### Bug Fixes
