@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/MuhammadAhmadSharif/proxma-patches/compare/1.0.0...1.1.0) (2026-11-07)
+
+### New Features
+
+* **mytelenor:** show numbered option positions and compact answer key (e.g. 21323) ([8fd25d7](https://github.com/MuhammadAhmadSharif/proxma-patches/commit/8fd25d728ef363fc34ac32d05fa8c548c7311637))
+
 ## 1.0.0 (2026-11-01)
 
 ### Bug Fixes
