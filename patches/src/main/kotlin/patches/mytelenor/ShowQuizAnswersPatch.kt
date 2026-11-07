@@ -116,9 +116,9 @@ val showQuizAnswersPatch = bytecodePatch(
         }
 
         var hooked = 0
-        dataClasses.forEach { hooked += hookGetters(it, "onQuestions") { type -> type in LIST_TYPES } }
-        questionClasses.forEach { hooked += hookGetters(it, "onQuestion") { type -> type in LIST_TYPES } }
-        choiceClasses.forEach { hooked += hookGetters(it, "onChoice") { type -> type == "Ljava/lang/String;" } }
+        dataClasses.forEach { hooked += hookGetters(it, "onQuestions") { type -> type != "V" } }
+        questionClasses.forEach { hooked += hookGetters(it, "onQuestion") { type -> type != "V" } }
+        choiceClasses.forEach { hooked += hookGetters(it, "onChoice") { type -> type != "V" } }
 
         if (hooked == 0) {
             throw PatchException("Show quiz answers: found the quiz models but none of their getters could be hooked")

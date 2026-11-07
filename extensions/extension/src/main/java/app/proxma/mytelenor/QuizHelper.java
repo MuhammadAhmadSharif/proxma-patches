@@ -5,6 +5,7 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.util.Log;
 import android.widget.Toast;
 
@@ -15,6 +16,7 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -24,9 +26,10 @@ import java.util.Map;
  *
  * <p>Called from the app's own quiz Gson models (see ShowQuizAnswersPatch): the response data class
  * ({@link #onQuestions}), each question ({@link #onQuestion}) and each choice ({@link #onChoice}). The
- * choice objects carry {@code isCorrect}; this class appends a tick to the text of the correct ones and
- * posts a notification listing every correct answer. Only fields are read here (never getters), so the
- * hooked getters cannot recurse.
+ * choice objects carry {@code isCorrect}; this class prefixes the 1-based option number (1..4) and
+ * appends a tick to the text of the correct ones, builds the compact numeric answer key (e.g. {@code 21323}),
+ * and posts a notification + Toast listing the key and every correct answer. Only fields are read here
+ * (never getters), so the hooked getters cannot recurse.
  */
 public final class QuizHelper {
 
@@ -45,7 +48,23 @@ public final class QuizHelper {
     private static final Map<Class<?>, Object> sCorrectField = new HashMap<>();
     private static final Map<Class<?>, Object> sTextField = new HashMap<>();
 
-    private static final LinkedHashSet<String> sAnswers = new LinkedHashSet<>();
+    private static final class AnswerItem {
+        final int optionNum;
+        final String text;
+
+        AnswerItem(int optionNum, String text) {
+            this.optionNum = optionNum;
+            this.text = text;
+        }
+    }
+
+    private static final Object LOCK = new Object();
+    private static final LinkedHashMap<Integer, AnswerItem> sQuestionsMap = new LinkedHashMap<>();
+    private static final Map<Integer, Integer> sChoiceOptionNum = new HashMap<>();
+    private static final Map<Integer, Integer> sChoiceToQuestion = new HashMap<>();
+    private static final Map<Integer, String> sCleanText = new HashMap<>();
+    private static final LinkedHashSet<Integer> sSeenChoices = new LinkedHashSet<>();
+
     private static long sSessionStart = 0L;
     private static String sLastNotified = "";
     private static volatile Context sContext;
@@ -87,18 +106,26 @@ public final class QuizHelper {
     public static void onQuestions(Object data) {
         try {
             if (data == null) return;
-            List<String> answers = new ArrayList<>();
-            for (Object question : collectionElements(data)) {
-                String a = processQuestion(question);
-                if (a != null) answers.add(a);
+            List<Object> questions = collectionElements(data);
+            if (questions.isEmpty()) return;
+            boolean anyFound = false;
+            synchronized (LOCK) {
+                LinkedHashMap<Integer, AnswerItem> fresh = new LinkedHashMap<>();
+                for (Object question : questions) {
+                    if (question == null) continue;
+                    AnswerItem item = processQuestionLocked(question);
+                    if (item != null) {
+                        fresh.put(System.identityHashCode(question), item);
+                        anyFound = true;
+                    }
+                }
+                if (anyFound) {
+                    sQuestionsMap.clear();
+                    sQuestionsMap.putAll(fresh);
+                    sSessionStart = System.currentTimeMillis();
+                }
             }
-            if (answers.isEmpty()) return;
-            synchronized (sAnswers) {
-                sAnswers.clear();
-                sAnswers.addAll(answers);
-                sSessionStart = System.currentTimeMillis();
-            }
-            scheduleFlush(0L);
+            if (anyFound) scheduleFlush(0L);
         } catch (Throwable t) {
             Log.w(TAG, "QUIZ_HELPER onQuestions " + t);
         }
@@ -107,8 +134,20 @@ public final class QuizHelper {
     /** A single question object (holds its choice list). */
     public static void onQuestion(Object question) {
         try {
-            String a = processQuestion(question);
-            if (a != null && addAnswer(a)) scheduleFlush(600L);
+            if (question == null) return;
+            boolean changed = false;
+            synchronized (LOCK) {
+                checkSessionExpiryLocked();
+                AnswerItem item = processQuestionLocked(question);
+                if (item != null) {
+                    int qId = System.identityHashCode(question);
+                    AnswerItem prev = sQuestionsMap.put(qId, item);
+                    if (prev == null || prev.optionNum != item.optionNum || !prev.text.equals(item.text)) {
+                        changed = true;
+                    }
+                }
+            }
+            if (changed) scheduleFlush(400L);
         } catch (Throwable t) {
             Log.w(TAG, "QUIZ_HELPER onQuestion " + t);
         }
@@ -117,8 +156,31 @@ public final class QuizHelper {
     /** A single choice object, read by the screen when it renders the option. */
     public static void onChoice(Object choice) {
         try {
-            String a = processChoice(choice);
-            if (a != null && addAnswer(a)) scheduleFlush(600L);
+            if (choice == null) return;
+            boolean changed = false;
+            synchronized (LOCK) {
+                checkSessionExpiryLocked();
+                int cId = System.identityHashCode(choice);
+                Integer optNum = sChoiceOptionNum.get(cId);
+                Integer qId = sChoiceToQuestion.get(cId);
+                if (optNum == null) {
+                    int index = sSeenChoices.size();
+                    optNum = (index % 4) + 1;
+                    qId = -((index / 4) + 1);
+                    sSeenChoices.add(cId);
+                    sChoiceOptionNum.put(cId, optNum);
+                    sChoiceToQuestion.put(cId, qId);
+                }
+                String clean = processChoiceLocked(choice, optNum);
+                if (clean != null && qId != null) {
+                    AnswerItem item = new AnswerItem(optNum, clean);
+                    AnswerItem prev = sQuestionsMap.put(qId, item);
+                    if (prev == null || prev.optionNum != item.optionNum || !prev.text.equals(item.text)) {
+                        changed = true;
+                    }
+                }
+            }
+            if (changed) scheduleFlush(400L);
         } catch (Throwable t) {
             Log.w(TAG, "QUIZ_HELPER onChoice " + t);
         }
@@ -128,30 +190,72 @@ public final class QuizHelper {
     // Model walking
     // ---------------------------------------------------------------------------------------------
 
-    /** Marks the correct choice(s) of a question; returns the (first) correct answer text. */
-    private static String processQuestion(Object question) throws IllegalAccessException {
+    private static void checkSessionExpiryLocked() {
+        long now = System.currentTimeMillis();
+        if (now - sSessionStart > SESSION_MS) {
+            sQuestionsMap.clear();
+            sChoiceOptionNum.clear();
+            sChoiceToQuestion.clear();
+            sCleanText.clear();
+            sSeenChoices.clear();
+            sSessionStart = now;
+        }
+    }
+
+    /** Marks the correct choice(s) of a question; returns the (first) correct AnswerItem with 1-based option index. */
+    private static AnswerItem processQuestionLocked(Object question) throws IllegalAccessException {
         if (question == null) return null;
-        String found = null;
+        int qId = System.identityHashCode(question);
+        AnswerItem found = null;
+        int pos = 0;
         for (Object element : collectionElements(question)) {
             if (element == null || correctField(element.getClass()) == null) continue;
-            String a = processChoice(element);
-            if (a != null && found == null) found = a;
+            pos++;
+            int cId = System.identityHashCode(element);
+            sChoiceOptionNum.put(cId, pos);
+            sChoiceToQuestion.put(cId, qId);
+            sSeenChoices.add(cId);
+            String clean = processChoiceLocked(element, pos);
+            if (clean != null && found == null) {
+                found = new AnswerItem(pos, clean);
+            }
         }
         return found;
     }
 
-    /** If this choice is the correct one, adds the tick to its text and returns the clean text. */
-    private static String processChoice(Object choice) throws IllegalAccessException {
+    /**
+     * If this choice is the correct one, formats its visible text as {@code "<optNum> - <clean>  ✓"}
+     * and returns the original clean text.
+     */
+    private static String processChoiceLocked(Object choice, int optNum) throws IllegalAccessException {
         if (choice == null) return null;
         Field correct = correctField(choice.getClass());
         if (correct == null || !truthy(correct.get(choice))) return null;
         Field textField = textField(choice);
         if (textField == null) return null;
-        String text = (String) textField.get(choice);
-        if (text == null || text.trim().isEmpty()) return null;
-        String clean = text.endsWith(MARK) ? text.substring(0, text.length() - MARK.length()) : text;
-        if (!text.endsWith(MARK)) textField.set(choice, text + MARK);
-        return clean.trim();
+        String current = (String) textField.get(choice);
+        if (current == null || current.trim().isEmpty()) return null;
+
+        int cId = System.identityHashCode(choice);
+        String clean = sCleanText.get(cId);
+        if (clean == null) {
+            clean = stripDecorations(current);
+            sCleanText.put(cId, clean);
+        }
+        String formatted = optNum + " - " + clean + MARK;
+        if (!formatted.equals(current)) {
+            textField.set(choice, formatted);
+        }
+        return clean;
+    }
+
+    private static String stripDecorations(String text) {
+        String s = text;
+        if (s.endsWith(MARK)) {
+            s = s.substring(0, s.length() - MARK.length());
+        }
+        s = s.replaceFirst("^[1-9]\\s*-\\s*", "");
+        return s.trim();
     }
 
     /** Elements of every Collection field declared on the object's class hierarchy. */
@@ -257,17 +361,6 @@ public final class QuizHelper {
     // Output
     // ---------------------------------------------------------------------------------------------
 
-    private static boolean addAnswer(String answer) {
-        synchronized (sAnswers) {
-            long now = System.currentTimeMillis();
-            if (now - sSessionStart > SESSION_MS) {
-                sAnswers.clear();
-                sSessionStart = now;
-            }
-            return sAnswers.add(answer);
-        }
-    }
-
     private static void scheduleFlush(long delayMs) {
         MAIN.removeCallbacks(FLUSH);
         MAIN.postDelayed(FLUSH, delayMs);
@@ -275,27 +368,35 @@ public final class QuizHelper {
 
     private static void flush() {
         try {
-            List<String> answers;
-            synchronized (sAnswers) { answers = new ArrayList<>(sAnswers); }
-            if (answers.isEmpty()) return;
-            String joined = android.text.TextUtils.join("\n", answers);
-            if (joined.equals(sLastNotified)) return;
-            sLastNotified = joined;
+            List<AnswerItem> items;
+            synchronized (LOCK) {
+                items = new ArrayList<>(sQuestionsMap.values());
+            }
+            if (items.isEmpty()) return;
+
+            StringBuilder keyDigits = new StringBuilder();
+            List<String> lines = new ArrayList<>();
+            for (int i = 0; i < items.size(); i++) {
+                AnswerItem item = items.get(i);
+                keyDigits.append(item.optionNum);
+                lines.add("Q" + (i + 1) + ": " + item.optionNum + " - " + item.text);
+            }
+
+            String key = keyDigits.toString();
+            String signature = key + "\n" + TextUtils.join("\n", lines);
+            if (signature.equals(sLastNotified)) return;
+            sLastNotified = signature;
 
             Context ctx = context();
             if (ctx == null) {
                 Log.w(TAG, "QUIZ_HELPER no context for notification");
                 return;
             }
-            WorkerNotify.notifyQuizAnswers(ctx, answers);
+            WorkerNotify.notifyQuizAnswers(ctx, key, lines);
 
-            StringBuilder sb = new StringBuilder("Answers: ");
-            for (int i = 0; i < answers.size(); i++) {
-                if (i > 0) sb.append(" | ");
-                sb.append(i + 1).append(". ").append(answers.get(i));
-            }
-            Toast.makeText(ctx, sb.toString(), Toast.LENGTH_LONG).show();
-            Log.i(TAG, "QUIZ_HELPER answers=" + answers.size());
+            String toastMsg = "Answer Key: " + key + "\n" + TextUtils.join(" | ", lines);
+            Toast.makeText(ctx, toastMsg, Toast.LENGTH_LONG).show();
+            Log.i(TAG, "QUIZ_HELPER key=" + key + " answers=" + lines.size());
         } catch (Throwable t) {
             Log.w(TAG, "QUIZ_HELPER flush " + t);
         }

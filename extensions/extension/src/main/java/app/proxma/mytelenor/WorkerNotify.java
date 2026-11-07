@@ -67,6 +67,10 @@ public final class WorkerNotify {
     }
 
     public static void notifyQuizAnswers(Context context, java.util.List<String> answers) {
+        notifyQuizAnswers(context, "", answers);
+    }
+
+    public static void notifyQuizAnswers(Context context, String answerKey, java.util.List<String> answers) {
         if (context == null || answers == null || answers.isEmpty()) return;
         try {
             if (Build.VERSION.SDK_INT >= 33) {
@@ -88,10 +92,17 @@ public final class WorkerNotify {
             int icon = context.getApplicationInfo().icon;
             if (icon == 0) return;
 
+            boolean hasKey = answerKey != null && !answerKey.isEmpty();
+            String title = hasKey ? "Answer & Win Key: " + answerKey : "Answer & Win: Quiz Answers";
+            String summary = android.text.TextUtils.join(" | ", answers);
+
             StringBuilder sb = new StringBuilder();
+            if (hasKey) {
+                sb.append("Answer Key: ").append(answerKey).append("\n");
+            }
             for (int i = 0; i < answers.size(); i++) {
                 if (i > 0) sb.append("\n");
-                sb.append(i + 1).append(". ").append(answers.get(i));
+                sb.append(answers.get(i));
             }
             String body = sb.toString();
 
@@ -103,10 +114,10 @@ public final class WorkerNotify {
             }
 
             builder.setSmallIcon(icon)
-                .setContentTitle("Answer & Win: Quiz Answers")
-                .setContentText(answers.size() + " correct answers ready (pull down to view)")
+                .setContentTitle(title)
+                .setContentText(summary)
                 .setStyle(new Notification.BigTextStyle()
-                    .setBigContentTitle("Answer & Win: Quiz Answers")
+                    .setBigContentTitle(title)
                     .bigText(body))
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(false);
@@ -116,7 +127,7 @@ public final class WorkerNotify {
             }
 
             nm.notify(NOTIF_QUIZ_ID, builder.build());
-            Log.i(TAG, "NOTIFY_QUIZ_ANSWERS posted: " + answers.size() + " answers");
+            Log.i(TAG, "NOTIFY_QUIZ_ANSWERS posted: key=" + answerKey + " count=" + answers.size());
         } catch (Throwable t) {
             Log.w(TAG, "notifyQuizAnswers failed: " + t);
         }
