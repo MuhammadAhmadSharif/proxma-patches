@@ -61,7 +61,6 @@ public final class QuizHelper {
     private static final LinkedHashMap<Integer, AnswerItem> sQuestionsMap = new LinkedHashMap<>();
     private static final Map<Integer, Integer> sChoiceOptionNum = new HashMap<>();
     private static final Map<Integer, Integer> sChoiceToQuestion = new HashMap<>();
-    private static final Map<Integer, String> sCleanText = new HashMap<>();
     private static final LinkedHashSet<Integer> sSeenChoices = new LinkedHashSet<>();
 
     private static long sSessionStart = 0L;
@@ -195,7 +194,6 @@ public final class QuizHelper {
             sQuestionsMap.clear();
             sChoiceOptionNum.clear();
             sChoiceToQuestion.clear();
-            sCleanText.clear();
             sSeenChoices.clear();
             sSessionStart = now;
         }
@@ -223,8 +221,7 @@ public final class QuizHelper {
     }
 
     /**
-     * If this choice is the correct one, formats its visible text as {@code "<optNum> - <clean>"}
-     * and returns the original clean text.
+     * If this choice is the correct one, returns its clean visible text without modifying the UI option.
      */
     private static String processChoiceLocked(Object choice, int optNum) throws IllegalAccessException {
         if (choice == null) return null;
@@ -234,22 +231,7 @@ public final class QuizHelper {
         if (textField == null) return null;
         String current = (String) textField.get(choice);
         if (current == null || current.trim().isEmpty()) return null;
-
-        int cId = System.identityHashCode(choice);
-        String clean = sCleanText.get(cId);
-        if (clean == null) {
-            clean = stripDecorations(current);
-            sCleanText.put(cId, clean);
-        }
-        String formatted = optNum + " - " + clean;
-        if (!formatted.equals(current)) {
-            textField.set(choice, formatted);
-        }
-        return clean;
-    }
-
-    private static String stripDecorations(String text) {
-        return text.replaceFirst("^[1-9]\\s*-\\s*", "").trim();
+        return current.trim();
     }
 
     /** Elements of every Collection field declared on the object's class hierarchy. */
@@ -387,9 +369,6 @@ public final class QuizHelper {
                 return;
             }
             WorkerNotify.notifyQuizAnswers(ctx, key, lines);
-
-            String toastMsg = "Answer Key: " + key + "\n" + TextUtils.join(" | ", lines);
-            Toast.makeText(ctx, toastMsg, Toast.LENGTH_LONG).show();
             Log.i(TAG, "QUIZ_HELPER key=" + key + " answers=" + lines.size());
         } catch (Throwable t) {
             Log.w(TAG, "QUIZ_HELPER flush " + t);
