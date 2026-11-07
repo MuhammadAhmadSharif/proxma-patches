@@ -1,3 +1,9 @@
+## [1.1.1](https://github.com/MuhammadAhmadSharif/proxma-patches/compare/1.1.0...1.1.1) (2026-11-07)
+
+### Bug Fixes
+
+* **mytelenor:** remove tick mark from correct option text ([ef5ce17](https://github.com/MuhammadAhmadSharif/proxma-patches/commit/ef5ce171f56c6ed07b0ea679925395481b63cd85))
+
 ## [1.1.0](https://github.com/MuhammadAhmadSharif/proxma-patches/compare/1.0.0...1.1.0) (2026-11-07)
 
 ### New Features

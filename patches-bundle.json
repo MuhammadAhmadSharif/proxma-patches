@@ -1,7 +1,7 @@
 {
-  "created_at": "2026-11-07T11:56:16",
-  "description": "## [1.1.0](https://github.com/MuhammadAhmadSharif/proxma-patches/compare/1.0.0...1.1.0) (2026-11-07)\n\n### New Features\n\n* **mytelenor:** show numbered option positions and compact answer key (e.g. 21323) ([8fd25d7](https://github.com/MuhammadAhmadSharif/proxma-patches/commit/8fd25d728ef363fc34ac32d05fa8c548c7311637))",
-  "download_url": "https://github.com/MuhammadAhmadSharif/proxma-patches/releases/download/1.1.0/patches-1.1.0.mpp",
+  "created_at": "2026-11-07T12:01:11",
+  "description": "## [1.1.1](https://github.com/MuhammadAhmadSharif/proxma-patches/compare/1.1.0...1.1.1) (2026-11-07)\n\n### Bug Fixes\n\n* **mytelenor:** remove tick mark from correct option text ([ef5ce17](https://github.com/MuhammadAhmadSharif/proxma-patches/commit/ef5ce171f56c6ed07b0ea679925395481b63cd85))",
+  "download_url": "https://github.com/MuhammadAhmadSharif/proxma-patches/releases/download/1.1.1/patches-1.1.1.mpp",
   "signature_download_url": "",
-  "version": "1.1.0"
+  "version": "1.1.1"
 }
